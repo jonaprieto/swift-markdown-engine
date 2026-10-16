@@ -5,8 +5,8 @@
 //  Created by Luca Chen on 31.07.26.
 //
 //  Find paints with `.backgroundColor`, and so do extension spans, code fences
-//  and table cells. Clearing find's highlights used to remove the attribute
-//  document-wide, which erased their block until something else restyled.
+//  and table cells. Find's highlights are drawn as rendering attributes, so
+//  painting and clearing them never touches the text's own backgrounds.
 //
 
 import AppKit
@@ -25,7 +25,7 @@ private struct InvertingHighlight: MarkdownExtension {
 }
 
 @MainActor
-@Suite("Find highlights give the block back when they clear")
+@Suite("Find highlights leave the text's own styling alone")
 struct FindHighlightRestoreTests {
 
     // "plain ==marked== tail": content `marked` is {8, 6}, `tail` is {17, 4}.
@@ -59,6 +59,18 @@ struct FindHighlightRestoreTests {
         tv.textStorage?.attribute(.backgroundColor, at: location, effectiveRange: nil) as? NSColor
     }
 
+    /// Whether find drew a highlight over `location`.
+    private func highlighted(_ tv: NativeTextView, at location: Int) -> Bool {
+        guard let tlm = tv.textLayoutManager, let tcm = tlm.textContentManager,
+              let loc = tcm.location(tlm.documentRange.location, offsetBy: location) else { return false }
+        var found = false
+        tlm.enumerateRenderingAttributes(from: tlm.documentRange.location, reverse: false) { _, attrs, range in
+            if range.contains(loc), attrs[.backgroundColor] != nil { found = true }
+            return !found
+        }
+        return found
+    }
+
     private func find(_ query: String, _ coordinator: NativeTextViewCoordinator) {
         coordinator.handleFindQuery(Notification(
             name: Notification.Name("findQuery"),
@@ -73,29 +85,18 @@ struct FindHighlightRestoreTests {
         )
     }
 
-    @Test("searching the highlighted word and dismissing leaves the block painted")
-    func blockReturnsAfterClearingItsOwnMatch() {
+    @Test("a match inside the block is drawn over it; the block's background stays")
+    func blockKeepsItsBackground() {
         let (coordinator, tv) = makeEditor(Self.text)
         #expect(background(tv, at: Self.blockContent.location) == NSColor.white)
 
         find("marked", coordinator)
-        #expect(background(tv, at: Self.blockContent.location) != NSColor.white)
-
-        done(coordinator)
-        // No click, no selection change: the block is back on its own.
-        #expect(background(tv, at: Self.blockContent.location) == NSColor.white)
-    }
-
-    @Test("a match somewhere else never touches the block")
-    func blockSurvivesAMatchElsewhere() {
-        let (coordinator, tv) = makeEditor(Self.text)
-
-        find("tail", coordinator)
+        #expect(highlighted(tv, at: Self.blockContent.location))
         #expect(background(tv, at: Self.blockContent.location) == NSColor.white)
 
         done(coordinator)
+        #expect(!highlighted(tv, at: Self.blockContent.location))
         #expect(background(tv, at: Self.blockContent.location) == NSColor.white)
-        #expect(background(tv, at: 17) == nil)
     }
 
     @Test("re-running the query drops the previous highlight instead of stacking")
@@ -105,7 +106,8 @@ struct FindHighlightRestoreTests {
         find("marked", coordinator)
         find("tail", coordinator)
 
-        #expect(background(tv, at: Self.blockContent.location) == NSColor.white)
-        #expect(background(tv, at: 17) != nil)
+        #expect(!highlighted(tv, at: Self.blockContent.location))
+        #expect(highlighted(tv, at: 17))
+        #expect(background(tv, at: 17) == nil)
     }
 }

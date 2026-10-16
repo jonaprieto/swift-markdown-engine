@@ -7,18 +7,16 @@
 //  Find-in-document highlighting. The host app posts the bus notifications
 //  registered in `MarkdownEditorBus.findScrollToRange` /
 //  `findClearHighlights` to drive the highlight overlay; this extension
-//  renders the highlights into the underlying NSTextStorage and scrolls the
-//  current match into view.
+//  paints the highlights and scrolls the current match into view.
+//
+//  Highlights are TextKit 2 rendering attributes, drawn over the text without
+//  touching the storage. Painting or clearing them neither restyles nor
+//  invalidates layout, so a query that matches thousands of times stays cheap
+//  to type. (They used to be storage attributes: every keystroke restyled each
+//  paragraph the previous query had touched and laid out the whole document.)
 //
 
 import AppKit
-
-extension NSAttributedString.Key {
-    /// Marks a background this file painted. `.backgroundColor` has other owners
-    /// (extension spans, code fences, table cells), so find has to recognize its
-    /// own highlights before removing any.
-    static let findHighlight = NSAttributedString.Key("FindHighlight")
-}
 
 extension NativeTextViewCoordinator {
     /// Legacy path: the host computes match ranges and posts them. Kept for compatibility, but
@@ -135,40 +133,19 @@ extension NativeTextViewCoordinator {
         postFindResults(count: remaining.count)
     }
 
-    /// Drop find's own backgrounds and restyle the paragraphs they sat in.
-    ///
-    /// Removing `.backgroundColor` takes the styling background with it - one
-    /// attribute, several owners - and nothing repaints it on its own, so an
-    /// `==` block stayed blank until the next restyle happened to run (a click).
-    /// Scoped to the marked ranges: paragraphs find never touched keep theirs.
+    /// Drop every find highlight. One call over the document: no storage edit,
+    /// no restyle, no layout.
     private func clearFindHighlights(in textView: NSTextView) {
-        guard let storage = textView.textStorage else { return }
-        let text = textView.string as NSString
-        guard text.length > 0 else { return }
-
-        var highlighted: [NSRange] = []
-        storage.enumerateAttribute(
-            .findHighlight,
-            in: NSRange(location: 0, length: text.length),
-            options: []
-        ) { value, range, _ in
-            if value != nil { highlighted.append(range) }
-        }
-        guard !highlighted.isEmpty else { return }
-
-        for range in highlighted {
-            storage.removeAttribute(.backgroundColor, range: range)
-            storage.removeAttribute(.findHighlight, range: range)
-        }
-        // Raw source mode has no styling to restore; restyleParagraphs no-ops there.
-        restyleParagraphs(highlighted.map { text.paragraphRange(for: $0) }, in: textView)
+        guard let tlm = textView.textLayoutManager else { return }
+        tlm.removeRenderingAttribute(.backgroundColor, for: tlm.documentRange)
     }
 
     /// Highlight all matches (current one stronger) and scroll the current match into view.
     private func renderFindMatches(_ allRanges: [NSRange], currentIndex: Int) {
-        guard let tv = textView else { return }
-        let storage = tv.textStorage
-        let fullRange = NSRange(location: 0, length: (tv.string as NSString).length)
+        guard let tv = textView,
+              let tlm = tv.textLayoutManager,
+              let tcm = tlm.textContentManager else { return }
+        let length = (tv.string as NSString).length
 
         clearFindHighlights(in: tv)
 
@@ -178,32 +155,40 @@ extension NativeTextViewCoordinator {
         let highlightColor = theme.findMatchHighlight.withAlphaComponent(matchAlpha)
         let currentHighlightColor = theme.findCurrentMatchHighlight
 
-        for (i, matchRange) in allRanges.enumerated() {
-            guard matchRange.location + matchRange.length <= fullRange.length else { continue }
-            let color = (i == currentIndex) ? currentHighlightColor : highlightColor
-            storage?.addAttribute(.backgroundColor, value: color, range: matchRange)
-            storage?.addAttribute(.findHighlight, value: true, range: matchRange)
-        }
-
-        if let tlm = tv.textLayoutManager {
-            tlm.ensureLayout(for: tlm.documentRange)
+        // Matches come in document order: step each location from the previous
+        // one rather than from the document start, so the walk stays linear.
+        var cursor = tlm.documentRange.location
+        var cursorOffset = 0
+        var currentStart: NSTextLocation?
+        for (i, match) in allRanges.enumerated() {
+            guard NSMaxRange(match) <= length, match.location >= cursorOffset,
+                  let start = tcm.location(cursor, offsetBy: match.location - cursorOffset),
+                  let end = tcm.location(start, offsetBy: match.length),
+                  let range = NSTextRange(location: start, end: end) else { continue }
+            cursor = start
+            cursorOffset = match.location
+            if i == currentIndex { currentStart = start }
+            tlm.addRenderingAttribute(.backgroundColor,
+                                      value: i == currentIndex ? currentHighlightColor : highlightColor,
+                                      for: range)
         }
 
         // Scroll the current match into view.
-        guard allRanges.indices.contains(currentIndex) else { return }
-        let range = allRanges[currentIndex]
-        guard range.location + range.length <= fullRange.length else { return }
+        guard let matchStart = currentStart else { return }
         // Scroll via TextKit 2 fragment layout, which works whether or not the
         // reading column is active. `scrollRangeToVisible` is unreliable for
         // off-screen content in a TextKit 2 text view (it routes through the
         // absent TextKit 1 layout manager), so it's only the last-resort fallback.
         // When the text view IS the document view, `tv.frame.origin.y` is 0 and
         // the offset below is a no-op, so the same math serves both layouts.
-        guard let tlm = tv.textLayoutManager,
-              let scrollView = tv.enclosingScrollView,
-              let matchStart = tlm.textContentManager?.location(tlm.documentRange.location, offsetBy: range.location) else {
-            tv.scrollRangeToVisible(range)
+        guard let scrollView = tv.enclosingScrollView else {
+            tv.scrollRangeToVisible(allRanges[currentIndex])
             return
+        }
+        // Lay out up to the match so its frame is real, not an estimate. Layout
+        // is untouched by highlighting, so this is a no-op once it is valid.
+        if let upToMatch = NSTextRange(location: tlm.documentRange.location, end: matchStart) {
+            tlm.ensureLayout(for: upToMatch)
         }
         tlm.enumerateTextLayoutFragments(from: matchStart, options: [.ensuresLayout]) { fragment in
             let cv = scrollView.contentView
@@ -225,43 +210,9 @@ extension NativeTextViewCoordinator {
         }
     }
 
+    /// Highlights are drawn, not stored, so clearing them moves nothing on screen.
     @objc func handleFindClearHighlights(_ notification: Notification) {
         guard let tv = textView else { return }
-        let scrollView = tv.enclosingScrollView
-        let preY = scrollView?.contentView.bounds.origin.y ?? 0
-        let insetsTop = scrollView?.contentInsets.top ?? 0
-        let visualTopDocY = preY + insetsTop
-        var anchorOffsetFromTop: CGFloat = 0
-        var anchorTextRange: NSTextRange? = nil
-        // Fragment frames are text-view-local; visualTopDocY is in document-view
-        // space — lift them by the text view's offset inside the container (the
-        // header band) before comparing.
-        let textViewTop = tv.frame.origin.y
-        if let tlm = tv.textLayoutManager {
-            tlm.enumerateTextLayoutFragments(from: tlm.documentRange.location, options: [.ensuresLayout]) { fragment in
-                let frame = fragment.layoutFragmentFrame.offsetBy(dx: 0, dy: textViewTop)
-                if frame.maxY < visualTopDocY { return true }
-                anchorTextRange = fragment.rangeInElement
-                anchorOffsetFromTop = visualTopDocY - frame.minY
-                return false
-            }
-        }
-
         clearFindHighlights(in: tv)
-        if let tlm = tv.textLayoutManager {
-            tlm.ensureLayout(for: tlm.documentRange)
-        }
-
-        if let tlm = tv.textLayoutManager, let anchor = anchorTextRange {
-            tlm.enumerateTextLayoutFragments(from: anchor.location, options: [.ensuresLayout]) { fragment in
-                let newDocY = fragment.layoutFragmentFrame.minY + textViewTop + anchorOffsetFromTop
-                let targetScrollY = newDocY - insetsTop
-                if let cv = scrollView?.contentView, abs(cv.bounds.origin.y - targetScrollY) > 0.5 {
-                    cv.scroll(to: NSPoint(x: cv.bounds.origin.x, y: targetScrollY))
-                    scrollView?.reflectScrolledClipView(cv)
-                }
-                return false
-            }
-        }
     }
 }
