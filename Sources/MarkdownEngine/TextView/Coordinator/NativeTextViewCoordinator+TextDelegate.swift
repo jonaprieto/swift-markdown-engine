@@ -903,6 +903,13 @@ extension NativeTextViewCoordinator {
                 }
             }
         }
+        // `[text](#heading)`: an in-document anchor, not a web address.
+        if let url = link as? URL, url.scheme == nil, url.fragment != nil,
+           let native = textView as? NativeTextView {
+            native.linkClickDidNavigate = true
+            native.openLink(url)
+            return true
+        }
         guard let target = WikiLinkService.resolveIdentifier(link: link, textView: textView, at: charIndex) else {
             // Web link (URL-valued): returning false lets AppKit open the URL
             // (the mouseDown fallback mirrors that). Opening a link is navigation

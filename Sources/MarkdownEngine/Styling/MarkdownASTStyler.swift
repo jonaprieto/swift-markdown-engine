@@ -771,15 +771,20 @@ enum MarkdownASTStyler {
         }
     }
 
+    /// What a link's `(target)` opens. `#heading` stays an in-document anchor; any
+    /// other target without `://` is taken as a web address.
+    static func linkTarget(_ raw: String) -> URL? {
+        if raw.hasPrefix("#") { return URL(string: raw) }
+        return URL(string: raw.contains("://") ? raw : "https://\(raw)")
+    }
+
     private static func styleLink(
         range: NSRange, textRange: NSRange, url urlRange: NSRange, markers: [NSRange],
         children: [InlineNode], font: NSFont, ctx: Ctx, into attrs: inout [StyledRange]
     ) {
         attrs.append((range, [.spellingState: 0]))
-        var urlString = ctx.ns.substring(with: urlRange)
-        if !urlString.contains("://") { urlString = "https://\(urlString)" }
         let isActive = ctx.isActive(range)
-        if let url = URL(string: urlString) {
+        if let url = linkTarget(ctx.ns.substring(with: urlRange)) {
             if isActive {
                 attrs.append((textRange, [
                     .foregroundColor: ctx.theme.link.withAlphaComponent(ctx.config.link.activeLinkAlpha),
