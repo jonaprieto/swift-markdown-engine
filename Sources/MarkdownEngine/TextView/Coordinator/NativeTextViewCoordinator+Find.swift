@@ -38,19 +38,20 @@ extension NativeTextViewCoordinator {
               let info = notification.userInfo,
               let query = info["query"] as? String else { return }
         let requestedIndex = info["currentIndex"] as? Int ?? 0
+        let caseSensitive = info["caseSensitive"] as? Bool ?? false
 
-        let allRanges = findMatches(of: query, in: tv.string as NSString)
+        let allRanges = findMatches(of: query, in: tv.string as NSString, caseSensitive: caseSensitive)
         let currentIndex = allRanges.isEmpty ? 0 : min(max(requestedIndex, 0), allRanges.count - 1)
         renderFindMatches(allRanges, currentIndex: currentIndex)
         postFindResults(count: allRanges.count)
     }
 
-    /// All ranges of `query` in `haystack` (display coordinates), case- and
-    /// diacritic-insensitive. Shared by find and replace.
-    func findMatches(of query: String, in haystack: NSString) -> [NSRange] {
+    /// All ranges of `query` in `haystack` (display coordinates); case- and
+    /// diacritic-insensitive unless `caseSensitive`. Shared by find and replace.
+    func findMatches(of query: String, in haystack: NSString, caseSensitive: Bool = false) -> [NSRange] {
         guard !query.isEmpty else { return [] }
         var ranges: [NSRange] = []
-        let opts: NSString.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
+        let opts: NSString.CompareOptions = caseSensitive ? [] : [.caseInsensitive, .diacriticInsensitive]
         var searchStart = 0
         while searchStart < haystack.length {
             let scope = NSRange(location: searchStart, length: haystack.length - searchStart)
@@ -76,8 +77,9 @@ extension NativeTextViewCoordinator {
               let query = info["query"] as? String, !query.isEmpty,
               let replacement = info["replacement"] as? String else { return }
         let requestedIndex = info["currentIndex"] as? Int ?? 0
+        let caseSensitive = info["caseSensitive"] as? Bool ?? false
 
-        let matches = findMatches(of: query, in: tv.string as NSString)
+        let matches = findMatches(of: query, in: tv.string as NSString, caseSensitive: caseSensitive)
         guard !matches.isEmpty else { postFindResults(count: 0); return }
         let idx = min(max(requestedIndex, 0), matches.count - 1)
         let target = matches[idx]
@@ -94,7 +96,7 @@ extension NativeTextViewCoordinator {
 
         // Re-find on the edited text; keep the index so focus lands on the next
         // occurrence (or clamps to the last remaining one).
-        let updated = findMatches(of: query, in: tv.string as NSString)
+        let updated = findMatches(of: query, in: tv.string as NSString, caseSensitive: caseSensitive)
         let nextIndex = updated.isEmpty ? 0 : min(idx, updated.count - 1)
         renderFindMatches(updated, currentIndex: nextIndex)
         postFindResults(count: updated.count)
@@ -106,8 +108,9 @@ extension NativeTextViewCoordinator {
               let info = notification.userInfo,
               let query = info["query"] as? String, !query.isEmpty,
               let replacement = info["replacement"] as? String else { return }
+        let caseSensitive = info["caseSensitive"] as? Bool ?? false
 
-        let matches = findMatches(of: query, in: tv.string as NSString)
+        let matches = findMatches(of: query, in: tv.string as NSString, caseSensitive: caseSensitive)
         guard !matches.isEmpty else { postFindResults(count: 0); return }
 
         // Group as one undo; edit back-to-front so earlier ranges stay valid.
@@ -128,7 +131,7 @@ extension NativeTextViewCoordinator {
         tv.breakUndoCoalescing()
 
         // Usually zero remain; non-zero only if the replacement contains the query.
-        let remaining = findMatches(of: query, in: tv.string as NSString)
+        let remaining = findMatches(of: query, in: tv.string as NSString, caseSensitive: caseSensitive)
         renderFindMatches(remaining, currentIndex: 0)
         postFindResults(count: remaining.count)
     }

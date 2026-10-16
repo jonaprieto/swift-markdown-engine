@@ -71,11 +71,11 @@ struct FindHighlightRestoreTests {
         return found
     }
 
-    private func find(_ query: String, _ coordinator: NativeTextViewCoordinator) {
+    private func find(_ query: String, _ coordinator: NativeTextViewCoordinator, caseSensitive: Bool = false) {
         coordinator.handleFindQuery(Notification(
             name: Notification.Name("findQuery"),
             object: nil,
-            userInfo: ["query": query, "currentIndex": 0]
+            userInfo: ["query": query, "currentIndex": 0, "caseSensitive": caseSensitive]
         ))
     }
 
@@ -109,5 +109,17 @@ struct FindHighlightRestoreTests {
         #expect(!highlighted(tv, at: Self.blockContent.location))
         #expect(highlighted(tv, at: 17))
         #expect(background(tv, at: 17) == nil)
+    }
+
+    @Test("case-sensitive find only matches the exact case")
+    func caseSensitiveFind() {
+        let (coordinator, tv) = makeEditor("Alpha alpha")
+        let ns = tv.string as NSString
+        #expect(coordinator.findMatches(of: "alpha", in: ns).count == 2)
+        #expect(coordinator.findMatches(of: "alpha", in: ns, caseSensitive: true).count == 1)
+
+        find("alpha", coordinator, caseSensitive: true)
+        #expect(!highlighted(tv, at: 0))
+        #expect(highlighted(tv, at: 6))
     }
 }
