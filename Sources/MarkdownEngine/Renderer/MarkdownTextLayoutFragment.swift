@@ -443,6 +443,27 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
         return rects
     }
 
+    /// The link drawn under `point` (fragment coordinates) by a rendered table in
+    /// this fragment. Wide tables draw in `WideTableOverlay`, which tests its own clicks.
+    func tableLink(at point: CGPoint) -> URL? {
+        guard let ts = textStorage, let range = fragmentNSRange, range.length > 0 else { return nil }
+        var url: URL?
+        ts.enumerateAttribute(.latexImage, in: range, options: []) { value, attrRange, stop in
+            guard let table = value as? TableImage, !table.links.isEmpty,
+                  ts.attribute(.scrollableBlockNaturalWidth, at: attrRange.location, effectiveRange: nil) == nil
+            else { return }
+            let boundsVal = ts.attribute(.latexBounds, at: attrRange.location, effectiveRange: nil) as? NSValue
+            let imageBounds = boundsVal?.rectValue ?? CGRect(origin: .zero, size: table.size)
+            let blockOffsetY = ts.attribute(.latexBlockOffsetY, at: attrRange.location, effectiveRange: nil) as? CGFloat
+            guard let rect = blockImageDrawRect(attrRange: attrRange, imageBounds: imageBounds,
+                                                blockOffsetY: blockOffsetY, point: .zero),
+                  rect.contains(point) else { return }
+            url = table.link(at: CGPoint(x: point.x - rect.minX, y: point.y - rect.minY))
+            stop.pointee = true
+        }
+        return url
+    }
+
     // MARK: - LaTeX Images
 
     private func drawLatexImages(at point: CGPoint, in context: CGContext) {

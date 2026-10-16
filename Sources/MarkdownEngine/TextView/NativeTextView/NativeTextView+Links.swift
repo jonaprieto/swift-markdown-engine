@@ -2,13 +2,29 @@
 //  NativeTextView+Links.swift
 //  MarkdownEngine
 //
-//  Links the text view opens itself: in-document `#heading` anchors, which
-//  AppKit would hand to the browser.
+//  Links the text view opens itself: links drawn inside rendered tables, which
+//  are images and carry no `.link`, and in-document `#heading` anchors.
 //
 
 import AppKit
 
 extension NativeTextView {
+    /// A plain click on a link drawn in a rendered table opens it, as in body text.
+    /// Elsewhere in the table the click still moves the caret in to edit.
+    func openTableLinkIfHit(event: NSEvent) -> Bool {
+        guard event.clickCount == 1,
+              event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty,
+              let tlm = textLayoutManager else { return false }
+        let local = convert(event.locationInWindow, from: nil)
+        let point = CGPoint(x: local.x - textContainerOrigin.x, y: local.y - textContainerOrigin.y)
+        guard let fragment = tlm.textLayoutFragment(for: point) as? MarkdownTextLayoutFragment,
+              let url = fragment.tableLink(at: CGPoint(x: point.x - fragment.layoutFragmentFrame.minX,
+                                                       y: point.y - fragment.layoutFragmentFrame.minY))
+        else { return false }
+        openLink(url)
+        return true
+    }
+
     /// Opens a link target: `#anchor` scrolls to its heading, anything else opens outside.
     func openLink(_ url: URL) {
         if url.scheme == nil, let anchor = url.fragment(percentEncoded: false) {

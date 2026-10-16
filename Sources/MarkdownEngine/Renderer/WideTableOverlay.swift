@@ -152,6 +152,15 @@ final class WideTableImageView: NSImageView {
             super.mouseDown(with: event)
             return
         }
+        // A link drawn in the table opens; elsewhere the click edits the table.
+        let local = convert(event.locationInWindow, from: nil)
+        let imagePoint = CGPoint(x: local.x, y: isFlipped ? local.y : bounds.height - local.y)
+        if event.clickCount == 1,
+           event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty,
+           let url = (image as? TableImage)?.link(at: imagePoint) {
+            textView.openLink(url)
+            return
+        }
         let location = overlay.anchorTextLocation
         let docLen = (textView.string as NSString).length
         guard location >= 0, location <= docLen else {
