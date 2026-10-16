@@ -84,4 +84,10 @@ struct TableCellTests {
         #expect(traits(s, "b").contains(.italic))
         #expect(traits(s, "c").contains(.bold))
     }
+
+    @Test func escapedPipeStaysInItsCell() throws {
+        let parsed = try #require(MarkdownStyler.parseTableSource("| K | V |\n|---|---|\n| Pipe | a \\| b |"))
+        #expect(parsed.rows[0] == ["Pipe", "a \\| b"])
+        #expect(cell(parsed.rows[0][1]).string == "a | b")
+    }
 }

@@ -313,10 +313,23 @@ extension MarkdownStyler {
     private static func parseTableRow(_ line: String) -> [String] {
         var s = line.trimmingCharacters(in: .whitespaces)
         if s.hasPrefix("|") { s.removeFirst() }
-        if s.hasSuffix("|") { s.removeLast() }
-        return s.split(separator: "|", omittingEmptySubsequences: false).map {
-            $0.trimmingCharacters(in: .whitespaces)
+        if s.hasSuffix("|"), !s.hasSuffix("\\|") { s.removeLast() }
+        // `\|` is a literal pipe inside a cell (GFM), not a column break; the
+        // inline parser later turns the escape into a plain `|`.
+        var cells: [String] = []
+        var current = ""
+        var escaped = false
+        for ch in s {
+            if ch == "|", !escaped {
+                cells.append(current)
+                current = ""
+            } else {
+                current.append(ch)
+            }
+            escaped = ch == "\\" && !escaped
         }
+        cells.append(current)
+        return cells.map { $0.trimmingCharacters(in: .whitespaces) }
     }
 
     private static func parseTableAlignments(_ line: String) -> [TableAlignment] {
