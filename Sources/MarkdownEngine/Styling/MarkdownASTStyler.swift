@@ -85,6 +85,8 @@ enum MarkdownASTStyler {
         let linkRanges = collectLinkRanges(in: blocks)
         styleAutoLinks(ctx: ctx, codeRanges: codeRanges, linkRanges: linkRanges, into: &attrs)
         styleIncompleteLinkBrackets(ctx: ctx, codeRanges: codeRanges, checkboxRanges: checkboxRanges, into: &attrs)
+        // After the bracket pass, so a resolved reference wins over its "incomplete" coloring.
+        styleReferences(ctx: ctx, codeRanges: codeRanges, skipRanges: checkboxRanges + linkRanges, into: &attrs)
         return attrs
     }
 
@@ -485,6 +487,131 @@ enum MarkdownASTStyler {
                 }
               }
             }
+        }
+    }
+
+    // MARK: - Reference links and footnotes
+
+    /// Definitions anywhere in the document: `[label]: url` and `[^label]: text`.
+    /// Labels match case-insensitively with whitespace collapsed, as in CommonMark.
+    struct ReferenceDefinitions {
+        var links: [String: URL] = [:]
+        var footnotes: Set<String> = []
+    }
+
+    static func referenceLabel(_ raw: String) -> String {
+        raw.lowercased().split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
+    private static let definitionPattern = regex(#"^ {0,3}\[(\^?)([^\]\r\n]+)\]:[ \t]*(\S*)"#)
+    /// `[text][label]`, `[text][]`, `[label]` and `[^label]`; not an image, wiki
+    /// link, escaped bracket, inline link `(…)` or definition `:`.
+    private static let referencePattern = regex(#"(?<![!\[\\])\[(\^?)([^\[\]\r\n]+)\](?:\[([^\[\]\r\n]*)\])?(?![(:])"#, false)
+
+    static func referenceDefinitions(in ns: NSString, codeRanges: [NSRange]) -> ReferenceDefinitions {
+        var defs = ReferenceDefinitions()
+        guard ns.range(of: "]:").location != NSNotFound, let re = definitionPattern else { return defs }
+        for m in re.matches(in: ns as String, range: NSRange(location: 0, length: ns.length))
+        where !isInCode(m.range, codeRanges) {
+            let label = referenceLabel(ns.substring(with: m.range(at: 2)))
+            if m.range(at: 1).length > 0 {
+                defs.footnotes.insert(label)
+                continue
+            }
+            var target = ns.substring(with: m.range(at: 3))
+            if target.hasPrefix("<"), target.hasSuffix(">") { target = String(target.dropFirst().dropLast()) }
+            // The first definition of a label wins.
+            if !target.isEmpty, defs.links[label] == nil, let url = linkTarget(target) {
+                defs.links[label] = url
+            }
+        }
+        return defs
+    }
+
+    /// In-document anchor of a footnote: `fn-` its definition, `fnref-` its first reference.
+    static func footnoteAnchor(_ kind: String, _ label: String) -> URL? {
+        let encoded = label.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? label
+        return URL(string: "#\(kind)-\(encoded)")
+    }
+
+    /// Reference links whose label is defined become links; `[^label]` with a
+    /// definition becomes a raised footnote number. Definitions themselves stay
+    /// visible, muted, so the target can be edited where it is written.
+    private static func styleReferences(ctx: Ctx, codeRanges: [NSRange], skipRanges: [NSRange], into attrs: inout [StyledRange]) {
+        let defs = referenceDefinitions(in: ctx.ns, codeRanges: codeRanges)
+        guard !defs.links.isEmpty || !defs.footnotes.isEmpty, let re = referencePattern else { return }
+        let ns = ctx.ns
+        for scan in ctx.scanRanges {
+            for m in re.matches(in: ctx.text, range: scan)
+            where !isInCode(m.range, codeRanges) && !isInCode(m.range, skipRanges) {
+                let inner = m.range(at: 2)
+                let second = m.range(at: 3)
+                let hasSecond = second.location != NSNotFound
+                if m.range(at: 1).length > 0 {
+                    let label = referenceLabel(ns.substring(with: inner))
+                    guard !hasSecond, defs.footnotes.contains(label),
+                          let url = footnoteAnchor("fn", label) else { continue }
+                    styleFootnoteNumber(m.range, label: inner, url: url, ctx: ctx, into: &attrs)
+                } else {
+                    let labelRange = hasSecond && second.length > 0 ? second : inner
+                    guard let url = defs.links[referenceLabel(ns.substring(with: labelRange))] else { continue }
+                    let markers = [NSRange(location: m.range.location, length: 1),
+                                   NSRange(location: NSMaxRange(inner), length: NSMaxRange(m.range) - NSMaxRange(inner))]
+                    attrs.append((m.range, [.spellingState: 0]))
+                    if ctx.isActive(m.range) {
+                        attrs.append((inner, [.foregroundColor: ctx.theme.link.withAlphaComponent(ctx.config.link.activeLinkAlpha)]))
+                        for marker in markers { attrs.append((marker, [.foregroundColor: ctx.theme.mutedText])) }
+                    } else {
+                        attrs.append((inner, [.link: url, .underlineStyle: NSUnderlineStyle.single.rawValue,
+                                              .foregroundColor: ctx.theme.link]))
+                        hide(markers, ctx: ctx, into: &attrs)
+                    }
+                }
+            }
+        }
+        styleDefinitions(defs: defs, ctx: ctx, codeRanges: codeRanges, into: &attrs)
+    }
+
+    /// `[label]:` of a link definition is muted; `[^label]:` of a footnote shows its
+    /// number, linking back to the first reference.
+    private static func styleDefinitions(defs: ReferenceDefinitions, ctx: Ctx, codeRanges: [NSRange], into attrs: inout [StyledRange]) {
+        guard let re = definitionPattern else { return }
+        for scan in ctx.scanRanges {
+            for m in re.matches(in: ctx.text, range: scan) where !isInCode(m.range, codeRanges) {
+                let open = NSRange(location: m.range(at: 1).location - 1, length: m.range(at: 1).length + 1)
+                let head = NSRange(location: open.location, length: NSMaxRange(m.range(at: 2)) + 2 - open.location)
+                attrs.append((head, [.spellingState: 0]))
+                guard m.range(at: 1).length > 0 else {
+                    attrs.append((head, [.foregroundColor: ctx.theme.mutedText]))
+                    continue
+                }
+                let label = referenceLabel(ctx.ns.substring(with: m.range(at: 2)))
+                guard let url = footnoteAnchor("fnref", label) else { continue }
+                styleFootnoteNumber(head, label: m.range(at: 2), url: url, ctx: ctx, into: &attrs)
+            }
+        }
+    }
+
+    /// `[^label]` (or `[^label]:`) drawn as a small raised link, markers hidden unless active.
+    private static func styleFootnoteNumber(_ range: NSRange, label: NSRange, url: URL, ctx: Ctx, into attrs: inout [StyledRange]) {
+        let markers = [NSRange(location: range.location, length: label.location - range.location),
+                       NSRange(location: NSMaxRange(label), length: NSMaxRange(range) - NSMaxRange(label))]
+        attrs.append((range, [.spellingState: 0]))
+        if ctx.isActive(range) {
+            attrs.append((label, [.foregroundColor: ctx.theme.link.withAlphaComponent(ctx.config.link.activeLinkAlpha)]))
+            for marker in markers { attrs.append((marker, [.foregroundColor: ctx.theme.mutedText])) }
+            return
+        }
+        let size = ctx.baseFont.pointSize
+        let small = NSFont(name: ctx.fontName, size: size * 0.72) ?? .systemFont(ofSize: size * 0.72)
+        attrs.append((label, [.link: url, .font: small, .baselineOffset: size * 0.35, .foregroundColor: ctx.theme.link]))
+        hide(markers, ctx: ctx, into: &attrs)
+    }
+
+    /// Shrink markers and make them invisible, as an inline link's `(url)` run.
+    private static func hide(_ markers: [NSRange], ctx: Ctx, into attrs: inout [StyledRange]) {
+        for marker in markers where marker.length > 0 {
+            attrs.append((marker, [.font: ctx.inlineMarkerFont, .foregroundColor: NSColor.clear]))
         }
     }
 

@@ -25,25 +25,45 @@ extension NativeTextView {
         return true
     }
 
-    /// Opens a link target: `#anchor` scrolls to its heading, anything else opens outside.
+    /// Opens a link target: `#anchor` scrolls to it, anything else opens outside.
     func openLink(_ url: URL) {
         if url.scheme == nil, let anchor = url.fragment(percentEncoded: false) {
-            scrollToHeading(anchor: anchor)
+            scrollToAnchor(anchor)
         } else if url.scheme != nil {
             NSWorkspace.shared.open(url)
         }
     }
 
-    /// Scrolls the heading whose anchor is `anchor` to the top. Anchors follow
-    /// GitHub: the heading text slugged, with `-1`, `-2` for repeats.
-    func scrollToHeading(anchor: String) {
-        guard let location = Self.headingLocation(anchor: anchor, in: string),
+    /// Scrolls what `anchor` names to the top: a heading (GitHub's anchor: the
+    /// heading text slugged, `-1`, `-2` for repeats), else a footnote's definition
+    /// (`fn-label`) or its first reference (`fnref-label`).
+    func scrollToAnchor(_ anchor: String) {
+        guard let location = Self.anchorLocation(anchor, in: string),
               let tlm = textLayoutManager,
               let tcm = tlm.textContentManager,
               let textLocation = tcm.location(tlm.documentRange.location, offsetBy: location) else { return }
         tlm.ensureLayout(for: NSTextRange(location: textLocation))
         guard let fragment = tlm.textLayoutFragment(for: textLocation) else { return }
         scroll(NSPoint(x: 0, y: max(0, fragment.layoutFragmentFrame.minY + textContainerOrigin.y - 8)))
+    }
+
+    /// UTF-16 offset of what `anchor` names; see `scrollToAnchor`.
+    static func anchorLocation(_ anchor: String, in text: String) -> Int? {
+        if let heading = headingLocation(anchor: anchor, in: text) { return heading }
+        for (prefix, definition) in [("fn-", true), ("fnref-", false)] where anchor.hasPrefix(prefix) {
+            return footnoteLocation(label: String(anchor.dropFirst(prefix.count)), definition: definition, in: text)
+        }
+        return nil
+    }
+
+    /// UTF-16 offset of `[^label]:` (the definition) or of the first `[^label]`
+    /// that is not one. Labels match case-insensitively.
+    static func footnoteLocation(label: String, definition: Bool, in text: String) -> Int? {
+        let escaped = NSRegularExpression.escapedPattern(for: label)
+        let pattern = definition ? "^ {0,3}\\[\\^\(escaped)\\]:" : "\\[\\^\(escaped)\\](?!:)"
+        guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .anchorsMatchLines])
+        else { return nil }
+        return re.firstMatch(in: text, range: NSRange(location: 0, length: (text as NSString).length))?.range.location
     }
 
     /// UTF-16 offset of the ATX heading `anchor` points at, skipping fenced code.
