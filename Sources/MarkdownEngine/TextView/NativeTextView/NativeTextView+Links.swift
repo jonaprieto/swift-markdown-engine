@@ -14,15 +14,19 @@ extension NativeTextView {
     func openTableLinkIfHit(event: NSEvent) -> Bool {
         guard event.clickCount == 1,
               event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty,
-              let tlm = textLayoutManager else { return false }
-        let local = convert(event.locationInWindow, from: nil)
-        let point = CGPoint(x: local.x - textContainerOrigin.x, y: local.y - textContainerOrigin.y)
-        guard let fragment = tlm.textLayoutFragment(for: point) as? MarkdownTextLayoutFragment,
-              let url = fragment.tableLink(at: CGPoint(x: point.x - fragment.layoutFragmentFrame.minX,
-                                                       y: point.y - fragment.layoutFragmentFrame.minY))
+              let url = tableLink(atViewPoint: convert(event.locationInWindow, from: nil))
         else { return false }
         openLink(url)
         return true
+    }
+
+    /// The link a rendered table draws under `viewPoint` (this view's coordinates).
+    func tableLink(atViewPoint viewPoint: CGPoint) -> URL? {
+        guard let tlm = textLayoutManager else { return nil }
+        let point = CGPoint(x: viewPoint.x - textContainerOrigin.x, y: viewPoint.y - textContainerOrigin.y)
+        guard let fragment = tlm.textLayoutFragment(for: point) as? MarkdownTextLayoutFragment else { return nil }
+        return fragment.tableLink(at: CGPoint(x: point.x - fragment.layoutFragmentFrame.minX,
+                                              y: point.y - fragment.layoutFragmentFrame.minY))
     }
 
     /// Opens a link target: `#anchor` scrolls to it, anything else opens outside.

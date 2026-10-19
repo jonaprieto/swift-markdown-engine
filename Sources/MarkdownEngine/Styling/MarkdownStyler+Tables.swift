@@ -611,11 +611,9 @@ extension MarkdownStyler {
 
         // Per-row heights: each row is as tall as its tallest (wrapped) cell.
         func cellHeight(_ cell: NSAttributedString, col: Int) -> CGFloat {
-            let bounds = cell.boundingRect(
-                with: NSSize(width: columnWidths[col], height: .greatestFiniteMagnitude),
-                options: [.usesLineFragmentOrigin]
-            )
-            return ceil(bounds.height)
+            let storage = laidOutCell(cell, width: columnWidths[col])
+            let layout = storage.layoutManagers[0]
+            return ceil(layout.usedRect(for: layout.textContainers[0]).height)
         }
         let rowCount = 1 + table.rows.count // header + body rows
         var rowContentHeights = [CGFloat](repeating: baseLineHeight, count: rowCount)
@@ -727,12 +725,32 @@ extension MarkdownStyler {
             separators.stroke()
 
             for (aligned, drawRect) in cells {
-                aligned.draw(with: drawRect, options: [.usesLineFragmentOrigin], context: nil)
+                let storage = laidOutCell(aligned, width: drawRect.width)
+                let layout = storage.layoutManagers[0]
+                let glyphs = layout.glyphRange(for: layout.textContainers[0])
+                layout.drawBackground(forGlyphRange: glyphs, at: drawRect.origin)
+                layout.drawGlyphs(forGlyphRange: glyphs, at: drawRect.origin)
             }
             return true
         }
         image.links = cells.flatMap { linkRects(in: $0.0, drawnIn: $0.1) }
         return image
+    }
+
+    /// `cell` laid out at `width`, held by the returned storage. Row heights,
+    /// drawing and link rects all come from this one layout: string drawing
+    /// spaces lines a point further apart than NSLayoutManager at some sizes
+    /// (15 and 16 pt among them), so link rects measured one way drifted off
+    /// the links drawn the other way, a point per line down a wrapped cell.
+    private static func laidOutCell(_ cell: NSAttributedString, width: CGFloat) -> NSTextStorage {
+        let storage = NSTextStorage(attributedString: cell)
+        let layout = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: width, height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        layout.addTextContainer(container)
+        storage.addLayoutManager(layout)
+        layout.ensureLayout(for: container)
+        return storage
     }
 
     /// Where each link of a cell lands in the table image (flipped, top-left origin).
@@ -742,12 +760,9 @@ extension MarkdownStyler {
             if let url = value as? URL { targets.append((range, url)) }
         }
         guard !targets.isEmpty else { return [] }
-        let storage = NSTextStorage(attributedString: cell)
-        let layout = NSLayoutManager()
-        let container = NSTextContainer(size: NSSize(width: rect.width, height: .greatestFiniteMagnitude))
-        container.lineFragmentPadding = 0
-        layout.addTextContainer(container)
-        storage.addLayoutManager(layout)
+        let storage = laidOutCell(cell, width: rect.width)
+        let layout = storage.layoutManagers[0]
+        let container = layout.textContainers[0]
         var links: [TableImage.Link] = []
         for (range, url) in targets {
             let glyphs = layout.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
