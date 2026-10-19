@@ -44,7 +44,10 @@ struct BlockBackgroundFillTests {
 
     /// Every fill in the document, in layout order, plus the line boxes they
     /// were painted over.
-    private func fills(in tv: NativeTextView) -> [(rect: CGRect, color: NSColor)] {
+    private func fills(
+        in tv: NativeTextView,
+        _ key: NSAttributedString.Key = .markdownBlockBackground
+    ) -> [(rect: CGRect, color: NSColor)] {
         guard let tlm = tv.textLayoutManager, let tcm = tlm.textContentManager else { return [] }
         let delegate = MarkdownLayoutManagerDelegate()
         tlm.delegate = delegate
@@ -57,7 +60,7 @@ struct BlockBackgroundFillTests {
             // Fragment-local rects lifted into document space, the way the
             // fragment's own draw origin does it.
             let origin = fragment.layoutFragmentFrame.origin
-            result += fragment.blockBackgroundFills(at: origin).map {
+            result += fragment.backgroundFills(key, at: origin).map {
                 (rect: $0.rect, color: $0.color)
             }
             return true
@@ -129,6 +132,19 @@ struct BlockBackgroundFillTests {
         let whole = ("alpha beta" as NSString).size(withAttributes: [.font: tv.baseFont]).width
         #expect(fill.width < whole, "fill \(fill.width) should stop before the full \(whole)pt line")
         #expect(fill.width > 0)
+    }
+
+    @Test("an inline code box hugs its font, not the line box")
+    func inlineCodeHugsFont() throws {
+        let tv = makeTextView("alpha beta", width: 400, extraLineSpacing: 12)
+        tv.textStorage?.addAttribute(.markdownInlineCodeBackground, value: NSColor.gray,
+                                     range: NSRange(location: 6, length: 4))
+
+        let fill = try #require(fills(in: tv, .markdownInlineCodeBackground).first?.rect)
+        let font = tv.baseFont
+        let pad = MarkdownTextLayoutFragment.inlineCodePadding
+        #expect(abs(fill.height - (font.ascender - font.descender + 2 * pad.height)) < 0.01)
+        #expect(fill.height < lineHeight(of: tv), "box \(fill) should sit inside the line box")
     }
 
     @Test("no attribute, no fill")

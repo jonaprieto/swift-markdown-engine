@@ -112,7 +112,7 @@ struct MarkdownASTStylerTests {
         let codeContentLocation = 2
 
         #expect(attrs.contains { range, attributes in
-            NSLocationInRange(codeContentLocation, range) && attributes[.backgroundColor] != nil
+            NSLocationInRange(codeContentLocation, range) && attributes[.markdownInlineCodeBackground] != nil
         })
         #expect(attrs.contains { range, attributes in
             NSLocationInRange(codeContentLocation, range) && attributes[.link] != nil

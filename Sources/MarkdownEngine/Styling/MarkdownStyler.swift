@@ -223,7 +223,8 @@ enum MarkdownStyler {
             layoutBridge?.defaultLineHeight(for: baseFont)
             ?? (baseFont.ascender - baseFont.descender + baseFont.leading)
         )
-        let codeBackgroundColor = configuration.services.syntaxHighlighter.backgroundColor()
+        // Only table cells read it, for their inline code.
+        let codeBackgroundColor = configuration.theme.inlineCodeBackground
         let hiddenMarkerSize = configuration.markers.hiddenMarkerFontSize
         let ctx = StylingContext(
             nsText: nsText,

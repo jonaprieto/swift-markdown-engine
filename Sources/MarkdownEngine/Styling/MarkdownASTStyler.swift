@@ -877,7 +877,7 @@ enum MarkdownASTStyler {
                 styleInlines(node.children, font: font, ctx: ctx, into: &attrs)
 
             case .code(let range, let contentRange):
-                attrs.append((contentRange, [.font: ctx.codeFont, .backgroundColor: ctx.codeBackground]))
+                attrs.append((contentRange, [.font: ctx.codeFont, .markdownInlineCodeBackground: ctx.theme.inlineCodeBackground]))
                 // Suppress spell-check underlines on inline `code` spans (markers + content).
                 attrs.append((range, [.spellingState: 0]))
                 let markerAttrs: [NSAttributedString.Key: Any] = ctx.isActive(range)

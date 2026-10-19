@@ -33,6 +33,9 @@ extension NSAttributedString.Key {
     static let scrollableBlockTotalHeight = NSAttributedString.Key("ScrollableBlockTotalHeight")
     /// NSValue(range:) — full multi-line range of a rendered table, used to scope width-change restyles.
     static let scrollableBlockFullRange = NSAttributedString.Key("ScrollableBlockFullRange")
+    /// NSColor — fill of the rounded box drawn behind an inline `code` run.
+    /// The box hugs the run's own font, not the line, so it reads as a chip.
+    static let markdownInlineCodeBackground = NSAttributedString.Key("MarkdownInlineCodeBackground")
 }
 
 public extension NSAttributedString.Key {
@@ -55,6 +58,10 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
     /// shared so the styler's text indent and the painted bars line up.
     static let blockquoteIndentPerLevel: CGFloat = 18
     static let blockquoteBarWidth: CGFloat = 3
+
+    /// How far the inline code box reaches past the code's glyph box, and its corner radius.
+    static let inlineCodePadding = CGSize(width: 2, height: 1)
+    static let inlineCodeCornerRadius: CGFloat = 3
 
     /// Strip below an overlay block for the legacy-small scroller (~11pt) + buffer.
     static let scrollableBlockScrollerStrip: CGFloat = 14
@@ -84,8 +91,10 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
         for rect in blockImageRects(at: .zero) {
             bounds = bounds.union(rect)
         }
-        // Line-box fills are taller than the glyphs they sit behind.
-        for fill in blockBackgroundFills(at: .zero) {
+        // Line-box fills are taller than the glyphs they sit behind, and
+        // inline code boxes pad past them.
+        for fill in backgroundFills(.markdownBlockBackground, at: .zero)
+            + backgroundFills(.markdownInlineCodeBackground, at: .zero) {
             bounds = bounds.union(fill.rect)
         }
         return bounds
@@ -324,20 +333,27 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
 
     // MARK: - Line-Box Backgrounds
 
-    /// Fill rects for every `.markdownBlockBackground` run in this fragment,
-    /// one per line the run touches, relative to `point`.
+    /// Fill rects for every `key` run in this fragment, one per line the run
+    /// touches, relative to `point`.
     ///
-    /// Each rect spans the line fragment's full typographic bounds — the same
-    /// box the blockquote bars use, which is why a run of them reads as one
-    /// continuous shape. AppKit's own `.backgroundColor` fill is the glyph box
-    /// instead (ascent + descent), so it falls short of the line height by the
-    /// leading plus `paragraph.lineHeightExtraSpacing` and a wrapped highlight
-    /// comes out as stacked bands.
-    func blockBackgroundFills(at point: CGPoint) -> [(rect: CGRect, color: NSColor)] {
+    /// A `.markdownBlockBackground` rect spans the line fragment's full
+    /// typographic bounds — the same box the blockquote bars use, which is why
+    /// a run of them reads as one continuous shape. AppKit's own
+    /// `.backgroundColor` fill is the glyph box instead (ascent + descent), so
+    /// it falls short of the line height by the leading plus
+    /// `paragraph.lineHeightExtraSpacing` and a wrapped highlight comes out as
+    /// stacked bands.
+    ///
+    /// A `.markdownInlineCodeBackground` rect is the run font's ascent to
+    /// descent instead, padded by `inlineCodePadding`.
+    func backgroundFills(_ key: NSAttributedString.Key, at point: CGPoint) -> [(rect: CGRect, color: NSColor)] {
         guard let ts = textStorage, let range = fragmentNSRange, range.length > 0 else { return [] }
         var fills: [(rect: CGRect, color: NSColor)] = []
-        ts.enumerateAttribute(.markdownBlockBackground, in: range, options: []) { value, attrRange, _ in
+        ts.enumerateAttribute(key, in: range, options: []) { value, attrRange, _ in
             guard let color = value as? NSColor else { return }
+            let font = key == .markdownInlineCodeBackground
+                ? ts.attribute(.font, at: attrRange.location, effectiveRange: nil) as? NSFont
+                : nil
             let local = NSRange(location: attrRange.location - range.location, length: attrRange.length)
             for lineFragment in textLineFragments {
                 let lineRange = lineFragment.characterRange
@@ -353,21 +369,26 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
                     ? tb.width
                     : lineFragment.locationForCharacter(at: hit.location + hit.length).x
                 guard endX > startX else { continue }
-                fills.append((
-                    rect: CGRect(x: point.x + tb.origin.x + startX,
-                                 y: point.y + tb.origin.y,
-                                 width: endX - startX,
-                                 height: tb.height),
-                    color: color
-                ))
+                var rect = CGRect(x: point.x + tb.origin.x + startX,
+                                  y: point.y + tb.origin.y,
+                                  width: endX - startX,
+                                  height: tb.height)
+                if let font {
+                    let baseline = rect.minY + lineFragment.locationForCharacter(at: hit.location).y
+                    rect = CGRect(x: rect.minX, y: baseline - font.ascender,
+                                  width: rect.width, height: font.ascender - font.descender)
+                        .insetBy(dx: -Self.inlineCodePadding.width, dy: -Self.inlineCodePadding.height)
+                }
+                fills.append((rect: rect, color: color))
             }
         }
         return fills
     }
 
     private func drawBlockBackgrounds(at point: CGPoint, in context: CGContext) {
-        let fills = blockBackgroundFills(at: point)
-        guard !fills.isEmpty else { return }
+        let fills = backgroundFills(.markdownBlockBackground, at: point)
+        let codeFills = backgroundFills(.markdownInlineCodeBackground, at: point)
+        guard !fills.isEmpty || !codeFills.isEmpty else { return }
 
         NSGraphicsContext.saveGraphicsState()
         defer { NSGraphicsContext.restoreGraphicsState() }
@@ -376,6 +397,11 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
         for fill in fills {
             fill.color.setFill()
             NSBezierPath(rect: fill.rect).fill()
+        }
+        let radius = Self.inlineCodeCornerRadius
+        for fill in codeFills {
+            fill.color.setFill()
+            NSBezierPath(roundedRect: fill.rect, xRadius: radius, yRadius: radius).fill()
         }
     }
 

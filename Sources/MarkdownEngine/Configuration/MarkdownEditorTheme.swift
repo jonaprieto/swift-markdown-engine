@@ -79,6 +79,11 @@ public struct MarkdownEditorTheme: Sendable {
     /// Background color used for `==highlight==` inline markup.
     public var highlightColor: NSColor
 
+    // MARK: Inline code
+
+    /// Fill of the rounded box drawn behind inline `` `code` `` spans.
+    public var inlineCodeBackground: NSColor
+
     // MARK: Init
 
     public init(
@@ -93,7 +98,8 @@ public struct MarkdownEditorTheme: Sendable {
         latexLightModeText: NSColor = .black,
         latexDarkModeText: NSColor = .white,
         strikethroughColor: NSColor = .labelColor,
-        highlightColor: NSColor = .systemOrange.withAlphaComponent(0.4)
+        highlightColor: NSColor = .systemOrange.withAlphaComponent(0.4),
+        inlineCodeBackground: NSColor = .quaternaryLabelColor
     ) {
         self.bodyText = bodyText
         self.mutedText = mutedText
@@ -107,6 +113,7 @@ public struct MarkdownEditorTheme: Sendable {
         self.latexDarkModeText = latexDarkModeText
         self.strikethroughColor = strikethroughColor
         self.highlightColor = highlightColor
+        self.inlineCodeBackground = inlineCodeBackground
     }
 
     /// System-native palette built from `NSColor` dynamic system colors.
