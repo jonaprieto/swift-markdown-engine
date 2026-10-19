@@ -469,13 +469,15 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
         return rects
     }
 
-    /// The link drawn under `point` (fragment coordinates) by a rendered table in
-    /// this fragment. Wide tables draw in `WideTableOverlay`, which tests its own clicks.
-    func tableLink(at point: CGPoint) -> URL? {
+    /// The table rendered in this fragment at the height of `point` (fragment
+    /// coordinates), the rect it is drawn in, and the document index it is
+    /// anchored at. Any x counts, so a click beside a table is a click on it.
+    /// Wide tables draw in `WideTableOverlay`, which takes its own clicks.
+    func renderedTable(at point: CGPoint) -> (table: TableImage, rect: CGRect, anchor: Int)? {
         guard let ts = textStorage, let range = fragmentNSRange, range.length > 0 else { return nil }
-        var url: URL?
+        var hit: (table: TableImage, rect: CGRect, anchor: Int)?
         ts.enumerateAttribute(.latexImage, in: range, options: []) { value, attrRange, stop in
-            guard let table = value as? TableImage, !table.links.isEmpty,
+            guard let table = value as? TableImage,
                   ts.attribute(.scrollableBlockNaturalWidth, at: attrRange.location, effectiveRange: nil) == nil
             else { return }
             let boundsVal = ts.attribute(.latexBounds, at: attrRange.location, effectiveRange: nil) as? NSValue
@@ -483,11 +485,11 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
             let blockOffsetY = ts.attribute(.latexBlockOffsetY, at: attrRange.location, effectiveRange: nil) as? CGFloat
             guard let rect = blockImageDrawRect(attrRange: attrRange, imageBounds: imageBounds,
                                                 blockOffsetY: blockOffsetY, point: .zero),
-                  rect.contains(point) else { return }
-            url = table.link(at: CGPoint(x: point.x - rect.minX, y: point.y - rect.minY))
+                  point.y >= rect.minY, point.y <= rect.maxY else { return }
+            hit = (table, rect, attrRange.location)
             stop.pointee = true
         }
-        return url
+        return hit
     }
 
     // MARK: - LaTeX Images

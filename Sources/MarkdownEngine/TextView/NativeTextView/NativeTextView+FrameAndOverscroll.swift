@@ -261,6 +261,7 @@ extension NativeTextView {
 
         let widthChanged = abs(newSize.width - frame.size.width) > 0.5
         if widthChanged {
+            tableSelection = nil   // tables re-render at the new width
             pendingFullLayoutMeasure = true   // re-wrap → re-measure height against a full layout
             isApplyingManagedFrameSize = true
             super.setFrameSize(NSSize(width: newSize.width, height: frame.size.height))

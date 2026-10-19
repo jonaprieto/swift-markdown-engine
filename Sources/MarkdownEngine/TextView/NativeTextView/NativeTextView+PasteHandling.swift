@@ -148,6 +148,7 @@ extension NativeTextView {
     }
 
     override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(copy(_:)), selectedTableText != nil { return true }
         if item.action == #selector(paste(_:)) {
             let pasteboard = NSPasteboard.general
             if PasteboardImageReader.canPasteImage(from: pasteboard) { return true }

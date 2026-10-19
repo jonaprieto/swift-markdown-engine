@@ -9,26 +9,6 @@
 import AppKit
 
 extension NativeTextView {
-    /// A plain click on a link drawn in a rendered table opens it, as in body text.
-    /// Elsewhere in the table the click still moves the caret in to edit.
-    func openTableLinkIfHit(event: NSEvent) -> Bool {
-        guard event.clickCount == 1,
-              event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty,
-              let url = tableLink(atViewPoint: convert(event.locationInWindow, from: nil))
-        else { return false }
-        openLink(url)
-        return true
-    }
-
-    /// The link a rendered table draws under `viewPoint` (this view's coordinates).
-    func tableLink(atViewPoint viewPoint: CGPoint) -> URL? {
-        guard let tlm = textLayoutManager else { return nil }
-        let point = CGPoint(x: viewPoint.x - textContainerOrigin.x, y: viewPoint.y - textContainerOrigin.y)
-        guard let fragment = tlm.textLayoutFragment(for: point) as? MarkdownTextLayoutFragment else { return nil }
-        return fragment.tableLink(at: CGPoint(x: point.x - fragment.layoutFragmentFrame.minX,
-                                              y: point.y - fragment.layoutFragmentFrame.minY))
-    }
-
     /// Opens a link target: `#anchor` scrolls to it, anything else opens outside.
     func openLink(_ url: URL) {
         if url.scheme == nil, let anchor = url.fragment(percentEncoded: false) {

@@ -49,6 +49,9 @@ final class WideTableOverlay: NSScrollView {
     }
 
     private let tableImageView: WideTableImageView
+    private var selectionView: TableSelectionView?
+
+    var image: NSImage? { tableImageView.image }
 
     init(sourceID: Int, image: NSImage, ownerTextView: NativeTextView, anchorLocation: Int) {
         self.sourceID = sourceID
@@ -123,7 +126,21 @@ final class WideTableOverlay: NSScrollView {
         if tableImageView.image !== image {
             tableImageView.image = image
             tableImageView.frame = CGRect(origin: .zero, size: image.size)
+            selectionView?.rects = []
         }
+    }
+
+    /// Shows a table selection over the table (image coordinates).
+    func showSelection(_ rects: [CGRect]) {
+        guard !rects.isEmpty || selectionView != nil else { return }
+        let view = selectionView ?? {
+            let view = TableSelectionView(frame: tableImageView.bounds)
+            view.autoresizingMask = [.width, .height]
+            tableImageView.addSubview(view)
+            selectionView = view
+            return view
+        }()
+        view.rects = rects
     }
 
     var horizontalOffset: CGFloat {
@@ -141,34 +158,28 @@ final class WideTableOverlay: NSScrollView {
 
 // MARK: - Document view inside the overlay
 
-/// Forwards mouseDown to caret-into-table (so clicking switches to edit mode).
+/// Hands clicks to the text view's table click handling: select text in the
+/// cells, open a link, or edit the table on a double click.
 final class WideTableImageView: NSImageView {
 
     weak var ownerOverlay: WideTableOverlay?
 
     override func mouseDown(with event: NSEvent) {
         guard let overlay = ownerOverlay,
-              let textView = overlay.ownerTextView else {
+              let textView = overlay.ownerTextView,
+              let table = image as? TableImage,
+              !event.modifierFlags.contains(.control) else {
             super.mouseDown(with: event)
             return
         }
-        // A link drawn in the table opens; elsewhere the click edits the table.
-        let local = convert(event.locationInWindow, from: nil)
-        let imagePoint = CGPoint(x: local.x, y: isFlipped ? local.y : bounds.height - local.y)
-        if event.clickCount == 1,
-           event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty,
-           let url = (image as? TableImage)?.link(at: imagePoint) {
-            textView.openLink(url)
-            return
+        textView.trackTableClick(event, table: table, anchor: overlay.anchorTextLocation, frame: nil) { [unowned self] event in
+            let local = convert(event.locationInWindow, from: nil)
+            return CGPoint(x: local.x, y: isFlipped ? local.y : bounds.height - local.y)
         }
-        let location = overlay.anchorTextLocation
-        let docLen = (textView.string as NSString).length
-        guard location >= 0, location <= docLen else {
-            super.mouseDown(with: event)
-            return
-        }
-        textView.window?.makeFirstResponder(textView)
-        textView.setSelectedRange(NSRange(location: location, length: 0))
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .iBeam)
     }
 }
 

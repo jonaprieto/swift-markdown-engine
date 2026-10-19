@@ -677,13 +677,15 @@ extension MarkdownStyler {
             )
             return (aligned, drawRect)
         }
-        var cells: [(NSAttributedString, NSRect)] = []
+        var cells: [TableImage.Cell] = []
         for (col, cell) in headerCells.enumerated() where col < columnCount {
-            cells.append(cellLayout(cell, col: col, row: 0))
+            let (text, rect) = cellLayout(cell, col: col, row: 0)
+            cells.append(TableImage.Cell(text: text, rect: rect, row: 0))
         }
         for (rowIdx, row) in bodyCells.enumerated() {
             for (col, cell) in row.enumerated() where col < columnCount {
-                cells.append(cellLayout(cell, col: col, row: rowIdx + 1))
+                let (text, rect) = cellLayout(cell, col: col, row: rowIdx + 1)
+                cells.append(TableImage.Cell(text: text, rect: rect, row: rowIdx + 1))
             }
         }
 
@@ -724,8 +726,9 @@ extension MarkdownStyler {
             }
             separators.stroke()
 
-            for (aligned, drawRect) in cells {
-                let storage = laidOutCell(aligned, width: drawRect.width)
+            for cell in cells {
+                let drawRect = cell.rect
+                let storage = laidOutCell(cell.text, width: drawRect.width)
                 let layout = storage.layoutManagers[0]
                 let glyphs = layout.glyphRange(for: layout.textContainers[0])
                 layout.drawBackground(forGlyphRange: glyphs, at: drawRect.origin)
@@ -733,7 +736,8 @@ extension MarkdownStyler {
             }
             return true
         }
-        image.links = cells.flatMap { linkRects(in: $0.0, drawnIn: $0.1) }
+        image.links = cells.flatMap { linkRects(in: $0.text, drawnIn: $0.rect) }
+        image.cells = cells
         return image
     }
 
@@ -742,7 +746,7 @@ extension MarkdownStyler {
     /// spaces lines a point further apart than NSLayoutManager at some sizes
     /// (15 and 16 pt among them), so link rects measured one way drifted off
     /// the links drawn the other way, a point per line down a wrapped cell.
-    private static func laidOutCell(_ cell: NSAttributedString, width: CGFloat) -> NSTextStorage {
+    static func laidOutCell(_ cell: NSAttributedString, width: CGFloat) -> NSTextStorage {
         let storage = NSTextStorage(attributedString: cell)
         let layout = NSLayoutManager()
         let container = NSTextContainer(size: NSSize(width: width, height: .greatestFiniteMagnitude))
@@ -821,12 +825,99 @@ final class TableImage: NSImage {
         let url: URL
     }
 
+    /// A cell's text as drawn and the rect it is drawn in (image coordinates,
+    /// top-left origin), header row first, left to right in each row.
+    struct Cell {
+        let text: NSAttributedString
+        let rect: CGRect
+        let row: Int
+    }
+
+    /// A caret position in the table: a cell and a UTF-16 offset in its text.
+    struct Position: Comparable {
+        let cell: Int
+        let offset: Int
+
+        static func < (a: Position, b: Position) -> Bool {
+            (a.cell, a.offset) < (b.cell, b.offset)
+        }
+    }
+
     /// Set once, right after rendering and before the image is shared.
     nonisolated(unsafe) var links: [Link] = []
+    nonisolated(unsafe) var cells: [Cell] = []
 
     /// The link drawn at `point` (image coordinates, top-left origin), if any.
     func link(at point: CGPoint) -> URL? {
         links.first { $0.rect.contains(point) }?.url
+    }
+
+    /// The caret position nearest `point`: in the nearest cell, at the
+    /// character boundary nearest the point.
+    func position(at point: CGPoint) -> Position? {
+        func distance(_ r: CGRect) -> CGFloat {
+            let dx = max(r.minX - point.x, 0, point.x - r.maxX)
+            let dy = max(r.minY - point.y, 0, point.y - r.maxY)
+            return dx * dx + dy * dy
+        }
+        guard let index = cells.indices.min(by: { distance(cells[$0].rect) < distance(cells[$1].rect) })
+        else { return nil }
+        let cell = cells[index]
+        let storage = MarkdownStyler.laidOutCell(cell.text, width: cell.rect.width)
+        return withExtendedLifetime(storage) {
+            let layout = storage.layoutManagers[0]
+            var fraction: CGFloat = 0
+            let glyph = layout.glyphIndex(
+                for: CGPoint(x: point.x - cell.rect.minX, y: point.y - cell.rect.minY),
+                in: layout.textContainers[0],
+                fractionOfDistanceThroughGlyph: &fraction
+            )
+            let offset = layout.characterIndexForGlyph(at: glyph) + (fraction > 0.5 ? 1 : 0)
+            return Position(cell: index, offset: min(offset, cell.text.length))
+        }
+    }
+
+    /// The part of each cell between `a` and `b`, in reading order.
+    private func spans(_ a: Position, _ b: Position) -> [(cell: Int, range: NSRange)] {
+        let (start, end) = (min(a, b), max(a, b))
+        return (start.cell...end.cell).map { index in
+            let from = index == start.cell ? start.offset : 0
+            let to = index == end.cell ? end.offset : cells[index].text.length
+            return (index, NSRange(location: from, length: max(0, to - from)))
+        }
+    }
+
+    /// Where the text between `a` and `b` is drawn (image coordinates).
+    func selectionRects(_ a: Position, _ b: Position) -> [CGRect] {
+        spans(a, b).flatMap { span -> [CGRect] in
+            guard span.range.length > 0 else { return [] }
+            let cell = cells[span.cell]
+            let storage = MarkdownStyler.laidOutCell(cell.text, width: cell.rect.width)
+            return withExtendedLifetime(storage) {
+                let layout = storage.layoutManagers[0]
+                var rects: [CGRect] = []
+                layout.enumerateEnclosingRects(
+                    forGlyphRange: layout.glyphRange(forCharacterRange: span.range, actualCharacterRange: nil),
+                    withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+                    in: layout.textContainers[0]
+                ) { r, _ in rects.append(r.offsetBy(dx: cell.rect.minX, dy: cell.rect.minY)) }
+                return rects
+            }
+        }
+    }
+
+    /// The text between `a` and `b`: cells of a row joined by tabs, rows by
+    /// newlines, so it pastes into a spreadsheet as cells.
+    func text(_ a: Position, _ b: Position) -> String {
+        var out = ""
+        var lastRow: Int?
+        for span in spans(a, b) {
+            let cell = cells[span.cell]
+            if let lastRow { out += cell.row == lastRow ? "\t" : "\n" }
+            lastRow = cell.row
+            out += (cell.text.string as NSString).substring(with: span.range)
+        }
+        return out
     }
 }
 

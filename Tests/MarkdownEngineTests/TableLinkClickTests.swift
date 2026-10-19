@@ -4,7 +4,8 @@
 //
 //  A click on a link drawn in a rendered table opens it, also when the link
 //  sits low in a cell that wraps over many lines: the rect the click is tested
-//  against has to be where the cell actually drew the link.
+//  against has to be where the cell actually drew the link. Any other single
+//  click selects in the table; a double click edits it.
 //
 
 import AppKit
@@ -121,6 +122,44 @@ struct TableLinkClickTests {
             x: tv.textContainerOrigin.x + imageOrigin.x + drawn.midX,
             y: tv.textContainerOrigin.y + imageOrigin.y + drawn.midY
         )
-        #expect(tv.tableLink(atViewPoint: click) == Self.target)
+        let hit = try #require(tv.renderedTable(atViewPoint: click))
+        #expect(hit.table.link(at: CGPoint(x: click.x - hit.frame.minX, y: click.y - hit.frame.minY)) == Self.target)
+    }
+
+    private func click(_ tv: NativeTextView, at viewPoint: CGPoint, count: Int) throws {
+        let event = try #require(NSEvent.mouseEvent(
+            with: .leftMouseDown, location: tv.convert(viewPoint, to: nil), modifierFlags: [],
+            timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: count, pressure: 1
+        ))
+        tv.mouseDown(with: event)
+    }
+
+    @Test("a single click selects in the table, a double click edits it")
+    func singleClickSelectsDoubleClickEdits() throws {
+        let tv = makeTextView(Self.note)
+        tv.setSelectedRange(NSRange(location: 0, length: 0))
+        let storage = try #require(tv.textStorage)
+        var anchor: Int?
+        storage.enumerateAttribute(.latexImage, in: NSRange(location: 0, length: storage.length)) { value, range, stop in
+            if value is TableImage { anchor = range.location; stop.pointee = true }
+        }
+        let tableAnchor = try #require(anchor)
+        let tlm = try #require(tv.textLayoutManager)
+        let tcm = try #require(tlm.textContentManager)
+        let location = try #require(tcm.location(tlm.documentRange.location, offsetBy: tableAnchor))
+        let fragment = try #require(tlm.textLayoutFragment(for: location))
+        // Inside the header cell, well away from the link at the bottom.
+        let point = CGPoint(x: tv.textContainerOrigin.x + fragment.layoutFragmentFrame.minX + 20,
+                            y: tv.textContainerOrigin.y + fragment.layoutFragmentFrame.midY)
+        let hit = try #require(tv.renderedTable(atViewPoint: point))
+        let header = CGPoint(x: hit.frame.minX + 20, y: hit.frame.minY + 12)
+
+        try click(tv, at: header, count: 1)
+        #expect(tv.tableSelection != nil)
+        #expect(tv.selectedRange() == NSRange(location: 0, length: 0), "a single click must not move the caret into the table")
+
+        try click(tv, at: header, count: 2)
+        #expect(tv.tableSelection == nil)
+        #expect(tv.selectedRange() == NSRange(location: tableAnchor, length: 0))
     }
 }

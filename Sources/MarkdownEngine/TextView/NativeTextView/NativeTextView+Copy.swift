@@ -15,6 +15,11 @@ import AppKit
 
 extension NativeTextView {
     override func copy(_ sender: Any?) {
+        if let text = selectedTableText {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            return
+        }
         let sel = selectedRange()
         guard sel.length > 0 else {
             super.copy(sender)

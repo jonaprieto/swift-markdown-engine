@@ -20,7 +20,7 @@ extension NativeTextView {
             return ts.attribute(.link, at: idx, effectiveRange: nil) != nil
         }()
         if let toggled = toggleTaskCheckboxIfHit(event: event), toggled { return }
-        if openTableLinkIfHit(event: event) { return }
+        if handleRenderedTableClick(event) { return }
         if remapClickInParagraphSpacing(event: event) { return }
         dragStartMouseScreenLoc = NSEvent.mouseLocation
         let boostTimer = Timer(timeInterval: 1.0 / configuration.dragSelection.ticksPerSecond, repeats: true) { [weak self] _ in

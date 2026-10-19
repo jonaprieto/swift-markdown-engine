@@ -74,6 +74,14 @@ final class NativeTextView: NSTextView {
     /// Persisted horizontal scroll offset per wide table; survives restyles.
     var tableHorizontalScrollOffsets: [Int: CGFloat] = [:]
 
+    // MARK: Table selection state
+    /// Text selected in a rendered table; see `NativeTextView+TableSelection.swift`.
+    var tableSelection: TableSelection? {
+        didSet { showTableSelection() }
+    }
+    /// Draws `tableSelection` over a table this view draws itself (not a wide one).
+    weak var tableSelectionView: TableSelectionView?
+
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         // Forward appearance changes to the embedder's highlighter via its registered notification.
