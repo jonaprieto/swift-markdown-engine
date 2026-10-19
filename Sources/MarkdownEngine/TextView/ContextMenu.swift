@@ -500,10 +500,57 @@ extension NativeTextViewWrapper.Coordinator {
         }
     }
 
+    /// Wraps the selection in `marker`. In a table a `|` or line break ends a cell, and
+    /// markers around one would land in two cells and break the table, so each cell's
+    /// part of the selection is wrapped on its own (back to front, so earlier parts
+    /// keep their offsets); the selection then spans all of them.
     private func wrapSelection(with marker: String) {
         guard let tv = textView else { return }
+        let parts = tableCellParts(of: tv.selectedRange(), in: tv.string)
+        var cores: [NSRange] = []
+        for part in parts.reversed() {
+            guard let core = wrap(part, with: marker) else { return }
+            cores.append(core)
+        }
+        guard let first = cores.last, let last = cores.first else { return }
+        let added = (marker as NSString).length * 2 * (cores.count - 1)
+        tv.setSelectedRange(NSRange(location: first.location, length: NSMaxRange(last) + added - first.location))
+    }
+
+    /// The parts of `range` between the cell separators (unescaped `|`, line breaks)
+    /// of a table it touches, skipping blank ones and delimiter-row cells; `[range]`
+    /// outside a table.
+    func tableCellParts(of range: NSRange, in text: String) -> [NSRange] {
+        guard range.length > 0,
+              parsedDocument(for: text).tokens.contains(where: {
+                  $0.kind == .table && NSIntersectionRange($0.range, range).length > 0
+              })
+        else { return [range] }
+        let ns = text as NSString
+        // ponytail: a cell holding only `-`, `:` and spaces is taken for the delimiter
+        // row and skipped; such a data cell is left unwrapped too.
+        let filler = CharacterSet(charactersIn: "-: \t")
+        var parts: [NSRange] = []
+        var start = range.location
+        for i in range.location ... NSMaxRange(range) {
+            let isEnd = i == NSMaxRange(range)
+            let ch = isEnd ? 0 : ns.character(at: i)
+            let separates = ch == 0x0A || (ch == 0x7C && (i == 0 || ns.character(at: i - 1) != 0x5C))
+            guard isEnd || separates else { continue }
+            let part = NSRange(location: start, length: i - start)
+            if ns.substring(with: part).trimmingCharacters(in: filler).isEmpty == false {
+                parts.append(part)
+            }
+            start = i + 1
+        }
+        return parts
+    }
+
+    /// Wraps `range` in `marker`, leaving its outer whitespace outside the markers.
+    /// Returns where the wrapped text is now, or nil when the text view refused the edit.
+    private func wrap(_ range: NSRange, with marker: String) -> NSRange? {
+        guard let tv = textView else { return nil }
         let nsText = tv.string as NSString
-        let range = tv.selectedRange()
         let original = nsText.substring(with: range)
         let leadingWS = original.prefix { $0.isWhitespace }.count
         let trailingWS = original.reversed().prefix { $0.isWhitespace }.count
@@ -522,9 +569,8 @@ extension NativeTextViewWrapper.Coordinator {
             with: newText,
             retaining: coreOldRange,
             at: (leading as NSString).length + (marker as NSString).length
-        ) else { return }
-        let newRange = NSRange(location: range.location + leadingWS + marker.count, length: core.count)
-        tv.setSelectedRange(newRange)
+        ) else { return nil }
+        return NSRange(location: range.location + leadingWS + marker.count, length: core.count)
     }
 }
 
